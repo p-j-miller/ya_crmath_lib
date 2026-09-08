@@ -1,0 +1,52 @@
+# Project: ya_maths
+# Makefile created by Embarcadero Dev-C++ 6.3
+
+CPP      = g++.exe
+CC       = gcc.exe
+WINDRES  = windres.exe
+OBJ      = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o
+LINKOBJ  = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o
+LIBS     = -L"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib" -L"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/lib" -static-libgcc -lquadmath -m64
+INCS     = -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include"
+CXXINCS  = -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include"
+BIN      = ya_maths.exe
+CXXFLAGS = $(CXXINCS) -Ofast -m64 -std=gnu99 -Wall
+CFLAGS   = $(INCS) -Ofast -m64 -std=gnu99 -Wall
+DEL      = C:\Program Files (x86)\Embarcadero\Dev-Cpp\devcpp.exe INTERNAL_DEL
+
+.PHONY: all all-before all-after clean clean-custom
+
+all: all-before $(BIN) all-after
+
+clean: clean-custom
+	${DEL} $(OBJ) $(BIN)
+
+$(BIN): $(OBJ)
+	$(CC) $(LINKOBJ) -o $(BIN) $(LIBS)
+
+main.o: main.c
+	$(CC) -c main.c -o main.o $(CFLAGS)
+
+cr_sqrt.o: cr_sqrt.c
+	$(CC) -c cr_sqrt.c -o cr_sqrt.o $(CFLAGS)
+
+../my_printf/my_printf.o: ../my_printf/my_printf.c
+	$(CC) -c ../my_printf/my_printf.c -o ../my_printf/my_printf.o $(CFLAGS)
+
+cr_atan2.o: cr_atan2.c
+	$(CC) -c cr_atan2.c -o cr_atan2.o $(CFLAGS)
+
+cr_cos.o: cr_cos.c
+	$(CC) -c cr_cos.c -o cr_cos.o $(CFLAGS)
+
+cr_exp.o: cr_exp.c
+	$(CC) -c cr_exp.c -o cr_exp.o $(CFLAGS)
+
+cr_log.o: cr_log.c
+	$(CC) -c cr_log.c -o cr_log.o $(CFLAGS)
+
+cr_pow.o: cr_pow.c
+	$(CC) -c cr_pow.c -o cr_pow.o $(CFLAGS)
+
+cr_sin.o: cr_sin.c
+	$(CC) -c cr_sin.c -o cr_sin.o $(CFLAGS)
