@@ -33,14 +33,51 @@ He also provided the test code.
  
 Overall its believed these functions will operate correctly on any processor/C compiler which implements IEEE 754 format double precision floating point (binary64).
 
+Version 1v1
+===========
+This version adds a number of functions (ya_exp(), ya_log(), ya_sin(), ya_cos()) that give identical results to the cr_xxx functions of release 1v0, but execute faster. 
+Also, as "accuracy.pdf" shows the built in square root for most compilers is accurate to 0.500ulp, this is used by default for sqrt as most processors have a built in square root instruction (Intel processors have this with SSE2) which is significantly faster than the software implementation in cr_sqrt.c (1.45 secs vs 5.86 secs with an Intel i3-10100).
+
+It should be noted that these new functions have only been tested with the default rounding mode ("round to even").
+
+The new functions are a hybrid of the CORE-MATH algorithms and the LLVM algorithms in the libc maths library from  llvm-project-23.1.1  (\llvm-project-23.1.1\libc\src\__support\FPUtil & \llvm-project-23.1.1\libc\src\__support\math https://libc.llvm.org/headers/math/index.html#higher-math-functions ), and only exist because of the excellent work of both the CORE-MATH and LLVM teams.
+
+These new functions also leverage the double-double basic maths functions in https://github.com/p-j-miller/ya_double_double
+
+Execution times (secs) within the supplied test program for the complete set of tests for each function are (using i3-10100 processor, with 1v0 being the cr_xxx time and 1v1 being the ya_xxx time):
+|function| 1v0 | 1v1 |
+|--------|-----|-----|
+|sqrt	 | 5.86| 1.45|
+|log	 | 9.03| 4.03|
+|exp	 | 7.37| 4.37|
+|sin	 |28.71| 8.90|
+|cos	 |26.51| 8.85|
+
+When 1v1 is used within wmawk2 ( https://github.com/p-j-miller/wmawk2 ) a single call to sqrt() in an awk script (using i3-10100 processor) takes ~ 3ns, while a call to exp() takes ~ 5ns and sin()/cos() take ~ 15ns. 
+
+1v1 also adds a number of derived functions that leverage the built in functions to give reproducible results, but have errors > 0.500 ulp. These are:
+~~~
+ double ya_tan(double x);
+ double ya_asin(double x);
+ double ya_acos(double x)
+~~~
+The errors of these are <=1.31ulp (for comparison the same functions in the UCRT are <=1.32ulp)
+
+The test program also tests two recurrences, one that provides sin(n*x) and cos(n*x) and the other just sin(n*x), with n increasing by one each step. These are significantly faster than using ya_sin/ya_cos but while they give reproducible results, they have errors significantly more than 0.500 ulp for very small values of x when n*x is very close to an integer multiple of pi (i.e. when sin(x)=0). The absolute error in this case is still small.
+
 USE
 ===
 At the start of files using these functions add (you may need to edit the relative path depending on your layout of directories):
 ~~~
-#define YA_CRMATH_LIB_REPLACE  /* if defined cr_xxx routines will replace standard C functions */
+#define YA_CRMATH_LIB_REPLACE  /* if defined cr_xxx/ya_xxx routines will replace standard C functions */
 #include "../ya_crmath_lib/ya_crmath.h
 ~~~
 If YA_CRMATH_LIB_REPLACE is not defined then these functions must be called as for example cr_cos(x), if it is defined then cos(x) will also use the cr_cos(x) function (which makes it simpler to add these functions into existing code).
+
+As of 1v1, by default using YA_CRMATH_LIB_REPLACE will give the ya_xxx functions (as they give the same results as the cr_xxx functions, just faster). A "#if" in ya_crmath.h allows you to quickly revert to the cr_xxx functions if required, and both cr_xxx and ya_xxx functions can be called directly.
+
+You will also need to compile and link to all the cr_*.c and ya_*.c files in the directory ya_crmath_lib (see the example compilation in the INSTALLATION section below).  
+You must compile the cr_xxx functions even if you only use the ya_xxx functions, as the ya_xxx functions leverage capability within the cr_xxx.c files.
 
 INSTALLATION 
 ============
@@ -50,7 +87,7 @@ A makefile and dev-c++ project file (ya_maths.dev) for the test program (main.c)
 
 A suitable gcc command line (for Windows or Linux) for the test program is:
 ~~~
-gcc -O3 main.c cr_*.c ../my_printf/my_printf.c -lm -lquadmath
+gcc -O3 main.c cr_*.c ya_*.c ../my_printf/my_printf.c ../hr_timer/hr_timer.c -lm -lquadmath
 ~~~
 This should give no warnings or errors, but will give 3 notes like:
 ~~~
@@ -69,9 +106,13 @@ These notes will not appear if NDEBUG is defined (-DNDEBUG as 1st argument to gc
 
 my_printf is available at https://github.com/p-j-miller/my_printf and is only needed for the test program (this is used as the Windows gcc port (mingw64) printf does not correctly print out long doubles). 
 
+hr_timer is available at https://github.com/p-j-miller/hr_timer and again this is only needed for the test program.
+
+ya_double_double.h is available at https://github.com/p-j-miller/ya_double_double
+
 Note that the test program must be linked with -lquadmath (this is also not required in normal use of ya_crmath_lib).
 
-The test program is run as "a" under windows, or "./a.out" under Linux. The tests typically take around 2 minutes to execute, with the tests for cr_cos and cr_sin the slowest.
+The test program is run as "a" under windows, or "./a.out" under Linux. The tests typically take around 11 minutes to execute, with the tests for cr_cos and cr_sin the slowest.
 
 The test programs checks each function with over 66 Million values.
 Each function is checked against a higher accuracy version - either long double or __float128.
