@@ -4,14 +4,14 @@
 CPP      = g++.exe
 CC       = gcc.exe
 WINDRES  = windres.exe
-OBJ      = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o
-LINKOBJ  = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o
+OBJ      = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o ../hr_timer/hr_timer.o ya_exp.o ya_log.o ya_sin_cos.o
+LINKOBJ  = main.o cr_sqrt.o ../my_printf/my_printf.o cr_atan2.o cr_cos.o cr_exp.o cr_log.o cr_pow.o cr_sin.o ../hr_timer/hr_timer.o ya_exp.o ya_log.o ya_sin_cos.o
 LIBS     = -L"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib" -L"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/lib" -static-libgcc -lquadmath -m64
 INCS     = -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include"
 CXXINCS  = -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/x86_64-w64-mingw32/include" -I"C:/winlibs/winlibs-x86_64-posix-seh-gcc-16.2.0-mingw-w64ucrt-14.0.0-r1/mingw64/lib/gcc/x86_64-w64-mingw32/16.2.0/include"
 BIN      = ya_maths.exe
 CXXFLAGS = $(CXXINCS) -Ofast -m64 -std=gnu99 -Wall
-CFLAGS   = $(INCS) -Ofast -m64 -std=gnu99 -Wall
+CFLAGS   = $(INCS) -Ofast -m64 -std=gnu99 -Wall -msse4.2 -mfpmath=sse -mavx2 -mfma -O3 -fno-math-errno -DNDEBUG
 DEL      = C:\Program Files (x86)\Embarcadero\Dev-Cpp\devcpp.exe INTERNAL_DEL
 
 .PHONY: all all-before all-after clean clean-custom
@@ -50,3 +50,15 @@ cr_pow.o: cr_pow.c
 
 cr_sin.o: cr_sin.c
 	$(CC) -c cr_sin.c -o cr_sin.o $(CFLAGS)
+
+../hr_timer/hr_timer.o: ../hr_timer/hr_timer.c
+	$(CC) -c ../hr_timer/hr_timer.c -o ../hr_timer/hr_timer.o $(CFLAGS)
+
+ya_exp.o: ya_exp.c
+	$(CC) -c ya_exp.c -o ya_exp.o $(CFLAGS)
+
+ya_log.o: ya_log.c
+	$(CC) -c ya_log.c -o ya_log.o $(CFLAGS)
+
+ya_sin_cos.o: ya_sin_cos.c
+	$(CC) -c ya_sin_cos.c -o ya_sin_cos.o $(CFLAGS)

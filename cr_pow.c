@@ -61,6 +61,7 @@ SOFTWARE.
 #include <stdio.h> // needed in case of rounding-test failure
 #include <stdint.h>
 #include <stdlib.h> // for exit
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif

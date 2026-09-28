@@ -1,7 +1,7 @@
-/* simple test program for ya_math_lib
+﻿/* simple test program for ya_math_lib
    Written by Peter Miller, 1/9/2026
  
- The concept for this is https://members.loria.fr/PZimmermann/papers/accuracy.pdf which gives the accuracy of functions in a large number of maths libaries 
+ The concept for this is https://members.loria.fr/PZimmermann/papers/accuracy.pdf which gives the accuracy of functions in a large number of maths libraries 
  
   While this works OK, and shows all max errors are 0.5ulp (as expected), note while the tests for all functions are almost identical, several tests have been "tweaked":
   	- sinq/cosq (rather than sinl/cosl) are used as references for sin/cos as sinl/cosl gave significant errors
@@ -9,6 +9,44 @@
     	- in all cases over 66 Million values are checked for each function (for sin,cos,atan2 its over 69 Million)
     
  Most values in the table of special values are from https://gitlab.inria.fr/zimmerma/math_accuracy/-/blob/master/binary64/check_sample.c?ref_type=heads 
+ 
+ Gcc setup for test program is the same as used for wmawk2 (minimum Windows 11 PC):
+	 -msse4.2
+	-mfpmath=sse
+	-mfma
+	-O3
+	-fno-math-errno
+	-DNDEBUG
+
+ Execution time (relative to "built in double" function) 1v1b [ so values >1* take longer]:
+Function 	no fma	-mfma	comments
+ sqrt 		1.00* 	1.00	(using __builtin_sqrt(x) )
+ sqrt		4.01* 	4.02	(using C implementation in cr_sqrt.c )
+ log		2.85*	1.30
+ exp		1.78*	1.21
+ sin		6.25*	3.45
+ cos		5.77*	3.27
+ atan2		1.35*	1.20
+ power		2.58*	1.21	power(x,3)
+ 			2.94*	1.37	power(x,0.5)
+ 			2.65*	1.19	power(x,-0.5)
+derived functions (see below):
+ ya_tan		8.16*	4.38  	1.212ulp 
+ ya_asin	3.65*	2.91	1.099 ulp  
+ ya_acos 	3.51*	2.89	1.311 ulp  
+ sin		0.54*	0.41	1.7e9 ulp using recurrence ("sum" in test program is accurate, this error is near x=2pi where sin(x) is 0 so the size of 1ulp is 2.65-23, the abs error is only  4.6e-14 )
+
+ 
+ Numerical Recipes says "If your programs runtime is dominated by evaluating trigonometric functions you are probably doing something wrong"!
+ It then offers the following recurrence to step sin/cos by a constant increment d from the previous value x (if initial x=0, sin(0)=0 and cos(0)=1)
+ 
+	 cos(x+d)=cos(x)-(a*cos(x)+b*sin(x))
+	 sin(x+d)=sin(x)-(a*sin(x)-b*cos(x))
+ 
+ where a and b are precomputed as:
+	 a=2*(sin(d/2))^2
+	 b=sin(d)
+ => Numerical Recipes says the reason for this implementation is that a & b do not lose significance if the increment d is small.
  
 */
 /*
@@ -37,12 +75,18 @@ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 ----------------------------------------------------------------------
 */ 
+
+#define CHECK_MAIN_CR_FUNCTIONS /* if defined check main cr_xxx functions and derived functions, otherwise just check derived functions */
+// #define INSTRUMENT /* if defined add print_ll_sin_counters() & print_ll_cos_counters()*/
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <float.h>
-#include <quadmath.h> /* see https://gcc.gnu.org/onlinedocs/libquadmath/quadmath_005fsnprintf.html#quadmath_005fsnprintf - also needs quadmath library linking in */
+#ifndef __BORLANDC__
+ #include <quadmath.h> /* see https://gcc.gnu.org/onlinedocs/libquadmath/quadmath_005fsnprintf.html#quadmath_005fsnprintf - also needs quadmath library linking in */
+#endif
 #include "../my_printf/my_printf.h"
+#include "../hr_timer/hr_timer.h"
 #include "ya_crmath.h"
 
 
@@ -51,7 +95,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #if (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)) || defined(__clang__)
  #if !defined(__BORLANDC__)
   #pragma GCC push_options
-  #pragma GCC optimize ("-O3") /* cannot use Ofast, normally -O3 is OK. Note macro expansion does not work here ! */
+  #pragma GCC optimize ("O3,no-math-errno") /* cannot use Ofast, normally -O3 is OK. Note macro expansion does not work here ! */
  #endif
  // based on  https://jdebp.uk/FGA/predefined-macros-processor.html "__i386__" is set by GCC,Clang,Intel which is good enough as the outer #if limits us to gcc and clang
  #ifdef __i386__
@@ -64,8 +108,18 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define TO_STRING(x) STRINGIZER(x)
 #define nos_elements_in(x) (sizeof(x)/(sizeof(x[0]))) /* number of elements in x , max index is 1 less than this as we index 0... */
 
+#ifdef __BORLANDC__
+static inline __float128 fabsq(__float128 x)
+{return x>=0?x:-x;
+}
+#endif
+
 double special_vals[]=
-	{NAN,-NAN,nan(""),-nan(""),nan("0"),-nan("0"),nan("1"),-nan("1"),INFINITY,-INFINITY,
+	{NAN,-NAN,
+   #ifndef __BORLANDC__
+	 nan(""),-nan(""),nan("0"),-nan("0"),nan("1"),-nan("1"),
+   #endif
+	 INFINITY,-INFINITY,
 	 -DBL_MAX, -DBL_MIN,-__DBL_DENORM_MIN__, -0.0,0.0,__DBL_DENORM_MIN__,DBL_MIN,DBL_MAX,
 	 -1,-2,-4,-8,-16,-256,
 	 1,2,4,8,16,256,
@@ -697,7 +751,7 @@ double special_vals[]=
     0,                       /* msvc-x64-rsqrt */
     0,                       /* freebsd */
     0,                       /* ArmPL */
- // following vallues from check_sample.c array extra
+ // following values from check_sample.c array extra
   /* don't remove the following values: they should give an error > 0.5 for
      glibc asin after commit f67f9c9 */
   0x1.fcd5742999ab8p-1,
@@ -722,6 +776,74 @@ double special_vals[]=
   0x1.fffbbb0468123p-32,   /* crlibm bug tanpi_rd */
   +0.0,                    /* msvc _y1 yields NaN */
   -0.0,
+  // Peter Miller - added all powers of 10 (incl denorms) to replace 10^0..10^22 that were originally present
+  	// +ve powers 10
+   	1e0,   1e1,   1e2,   1e3,   1e4,   1e5,   1e6,   1e7,   1e8,    1e9,
+    1e10,  1e11,  1e12,  1e13,  1e14,  1e15,  1e16,  1e17,  1e18,  1e19,
+    1e20,  1e21,  1e22,  1e23,  1e24,  1e25,  1e26,  1e27,  1e28,  1e29,
+    1e30,  1e31,  1e32,  1e33,  1e34,  1e35,  1e36,  1e37,  1e38,  1e39,
+    1e40,  1e41,  1e42,  1e43,  1e44,  1e45,  1e46,  1e47,  1e48,  1e49,
+    1e50,  1e51,  1e52,  1e53,  1e54,  1e55,  1e56,  1e57,  1e58,  1e59,
+    1e60,  1e61,  1e62,  1e63,  1e64,  1e65,  1e66,  1e67,  1e68,  1e69,
+    1e70,  1e71,  1e72,  1e73,  1e74,  1e75,  1e76,  1e77,  1e78,  1e79,
+    1e80,  1e81,  1e82,  1e83,  1e84,  1e85,  1e86,  1e87,  1e88,  1e89,
+    1e90,  1e91,  1e92,  1e93,  1e94,  1e95,  1e96,  1e97,  1e98,  1e99,
+    1e100, 1e101, 1e102, 1e103, 1e104, 1e105, 1e106, 1e107, 1e108, 1e109,
+    1e110, 1e111, 1e112, 1e113, 1e114, 1e115, 1e116, 1e117, 1e118, 1e119,
+    1e120, 1e121, 1e122, 1e123, 1e124, 1e125, 1e126, 1e127, 1e128, 1e129,
+    1e130, 1e131, 1e132, 1e133, 1e134, 1e135, 1e136, 1e137, 1e138, 1e139,
+    1e140, 1e141, 1e142, 1e143, 1e144, 1e145, 1e146, 1e147, 1e148, 1e149,
+    1e150, 1e151, 1e152, 1e153, 1e154, 1e155, 1e156, 1e157, 1e158, 1e159,
+    1e160, 1e161, 1e162, 1e163, 1e164, 1e165, 1e166, 1e167, 1e168, 1e169,
+    1e170, 1e171, 1e172, 1e173, 1e174, 1e175, 1e176, 1e177, 1e178, 1e179,
+    1e180, 1e181, 1e182, 1e183, 1e184, 1e185, 1e186, 1e187, 1e188, 1e189,
+    1e190, 1e191, 1e192, 1e193, 1e194, 1e195, 1e196, 1e197, 1e198, 1e199,
+    1e200, 1e201, 1e202, 1e203, 1e204, 1e205, 1e206, 1e207, 1e208, 1e209,
+    1e210, 1e211, 1e212, 1e213, 1e214, 1e215, 1e216, 1e217, 1e218, 1e219,
+    1e220, 1e221, 1e222, 1e223, 1e224, 1e225, 1e226, 1e227, 1e228, 1e229,
+    1e230, 1e231, 1e232, 1e233, 1e234, 1e235, 1e236, 1e237, 1e238, 1e239,
+    1e240, 1e241, 1e242, 1e243, 1e244, 1e245, 1e246, 1e247, 1e248, 1e249,
+    1e250, 1e251, 1e252, 1e253, 1e254, 1e255, 1e256, 1e257, 1e258, 1e259,
+    1e260, 1e261, 1e262, 1e263, 1e264, 1e265, 1e266, 1e267, 1e268, 1e269,
+    1e270, 1e271, 1e272, 1e273, 1e274, 1e275, 1e276, 1e277, 1e278, 1e279,
+    1e280, 1e281, 1e282, 1e283, 1e284, 1e285, 1e286, 1e287, 1e288, 1e289,
+    1e290, 1e291, 1e292, 1e293, 1e294, 1e295, 1e296, 1e297, 1e298, 1e299,
+    1e300, 1e301, 1e302, 1e303, 1e304, 1e305, 1e306, 1e307, 1e308,
+	// negative powers of 10
+    1e-0,   1e-1,   1e-2,   1e-3,   1e-4,   1e-5,   1e-6,   1e-7,   1e-8,    1e-9,
+    1e-10,  1e-11,  1e-12,  1e-13,  1e-14,  1e-15,  1e-16,  1e-17,  1e-18,  1e-19,
+    1e-20,  1e-21,  1e-22,  1e-23,  1e-24,  1e-25,  1e-26,  1e-27,  1e-28,  1e-29,
+    1e-30,  1e-31,  1e-32,  1e-33,  1e-34,  1e-35,  1e-36,  1e-37,  1e-38,  1e-39,
+    1e-40,  1e-41,  1e-42,  1e-43,  1e-44,  1e-45,  1e-46,  1e-47,  1e-48,  1e-49,
+    1e-50,  1e-51,  1e-52,  1e-53,  1e-54,  1e-55,  1e-56,  1e-57,  1e-58,  1e-59,
+    1e-60,  1e-61,  1e-62,  1e-63,  1e-64,  1e-65,  1e-66,  1e-67,  1e-68,  1e-69,
+    1e-70,  1e-71,  1e-72,  1e-73,  1e-74,  1e-75,  1e-76,  1e-77,  1e-78,  1e-79,
+    1e-80,  1e-81,  1e-82,  1e-83,  1e-84,  1e-85,  1e-86,  1e-87,  1e-88,  1e-89,
+    1e-90,  1e-91,  1e-92,  1e-93,  1e-94,  1e-95,  1e-96,  1e-97,  1e-98,  1e-99,
+    1e-100, 1e-101, 1e-102, 1e-103, 1e-104, 1e-105, 1e-106, 1e-107, 1e-108, 1e-109,
+    1e-110, 1e-111, 1e-112, 1e-113, 1e-114, 1e-115, 1e-116, 1e-117, 1e-118, 1e-119,
+    1e-120, 1e-121, 1e-122, 1e-123, 1e-124, 1e-125, 1e-126, 1e-127, 1e-128, 1e-129,
+    1e-130, 1e-131, 1e-132, 1e-133, 1e-134, 1e-135, 1e-136, 1e-137, 1e-138, 1e-139,
+    1e-140, 1e-141, 1e-142, 1e-143, 1e-144, 1e-145, 1e-146, 1e-147, 1e-148, 1e-149,
+    1e-150, 1e-151, 1e-152, 1e-153, 1e-154, 1e-155, 1e-156, 1e-157, 1e-158, 1e-159,
+    1e-160, 1e-161, 1e-162, 1e-163, 1e-164, 1e-165, 1e-166, 1e-167, 1e-168, 1e-169,
+    1e-170, 1e-171, 1e-172, 1e-173, 1e-174, 1e-175, 1e-176, 1e-177, 1e-178, 1e-179,
+    1e-180, 1e-181, 1e-182, 1e-183, 1e-184, 1e-185, 1e-186, 1e-187, 1e-188, 1e-189,
+    1e-190, 1e-191, 1e-192, 1e-193, 1e-194, 1e-195, 1e-196, 1e-197, 1e-198, 1e-199,
+    1e-200, 1e-201, 1e-202, 1e-203, 1e-204, 1e-205, 1e-206, 1e-207, 1e-208, 1e-209,
+    1e-210, 1e-211, 1e-212, 1e-213, 1e-214, 1e-215, 1e-216, 1e-217, 1e-218, 1e-219,
+    1e-220, 1e-221, 1e-222, 1e-223, 1e-224, 1e-225, 1e-226, 1e-227, 1e-228, 1e-229,
+    1e-230, 1e-231, 1e-232, 1e-233, 1e-234, 1e-235, 1e-236, 1e-237, 1e-238, 1e-239,
+    1e-240, 1e-241, 1e-242, 1e-243, 1e-244, 1e-245, 1e-246, 1e-247, 1e-248, 1e-249,
+    1e-250, 1e-251, 1e-252, 1e-253, 1e-254, 1e-255, 1e-256, 1e-257, 1e-258, 1e-259,
+    1e-260, 1e-261, 1e-262, 1e-263, 1e-264, 1e-265, 1e-266, 1e-267, 1e-268, 1e-269,
+    1e-270, 1e-271, 1e-272, 1e-273, 1e-274, 1e-275, 1e-276, 1e-277, 1e-278, 1e-279,
+    1e-280, 1e-281, 1e-282, 1e-283, 1e-284, 1e-285, 1e-286, 1e-287, 1e-288, 1e-289,
+    1e-290, 1e-291, 1e-292, 1e-293, 1e-294, 1e-295, 1e-296, 1e-297, 1e-298, 1e-299,
+    1e-300, 1e-301, 1e-302, 1e-303, 1e-304, 1e-305, 1e-306, 1e-307, 1e-308, 1e-309, 
+	1e-310,	1e-311,	1e-312,	1e-313,	1e-314, 1e-315,	1e-316,	1e-317,	1e-318,	1e-319,
+	1e-320,	1e-321,	1e-322,	1e-323, 		  
+#if 0  // all powers of 10 now in this table (above) so these are not needed
   0x1p+0, /* 10^0 */
   0x1.4p+3, /* 10^1 */
   0x1.9p+6, /* 10^2 */
@@ -745,6 +867,7 @@ double special_vals[]=
   0x1.5af1d78b58c4p+66, /* 10^20 */
   0x1.b1ae4d6e2ef5p+69, /* 10^21 */
   0x1.0f0cf064dd592p+73, /* 10^22 */
+#endif  
   /* the following are inputs near zeros of Bessel functions j0,j1,y0,y1
      from Table 3 of https://www.cl.cam.ac.uk/~jrh13/papers/bessel.pdf */
   0x1.782b7a20df6d4p+66, /* j0 and y1 */
@@ -861,18 +984,69 @@ int main(int argc, char *argv[])
 {double x,y_cr,me_x,m_rel_e_x,m_rel_e_y;// m_rel_e_y as a double is correct, as we use nextafter() on this to get the value for 1upl (as a double)
  long double y,e,me,me_y,rel_e,m_rel_e,m_rel_a; // compare against long double function
  double yr;
- int errs=0;
- 
+ double nexty;
+ int errs=0,tot_errs=0,errs_ulp=0;// tot_errs is nos tests where errs>0. errs_ulp is count of tests where ulp>0.5 but was expected to be <=0.5
+ double ulp_err;// error in ulp's
+ volatile double ysum; // used for timing
+ double start_t, end_t,time_ref,time_cr;
+  __float128 y128,e128,m_rel_a128  ;
+ printf("Sizeof double=%u size of long double=%u\n",(unsigned)sizeof(double),(unsigned)sizeof(long double));
+ printf("Complied with C standard version=%u on GCC %s\n\n",(unsigned int)__STDC_VERSION__,__VERSION__);
+#ifdef __BORLANDC__
+ printf("Built using C++ Builder %s so long double is the same as double and there are no __float128 functions so errors will not be accurate!\n",TO_STRING(__BORLANDC__));
+#endif
+#ifdef __AVX2__
+ printf("__AVX2__ is defined\n");
+#endif
+#ifdef __FMA__
+ printf("__FMA__ is defined\n");
+#endif
+
+#if 0 /* just check ll_exp() */
+ printf("ll_exp() simple checks:\n");
+ printf("ll_exp(0)=%.20g (expected %.20g)\n",ll_exp(0),cr_exp(0));
+ printf("ll_exp(1)=%.20g (expected %.20g)\n",ll_exp(1),cr_exp(1));
+ printf("ll_exp(2)=%.20g (expected %.20g)\n",ll_exp(2),cr_exp(2));
+ printf("ll_exp(3)=%.20g (expected %.20g)\n",ll_exp(3),cr_exp(3)); 
+ printf("ll_exp(0.5)=%.20g (expected %.20g)\n",ll_exp(0.5),cr_exp(0.5)); 
+ printf("ll_exp(-0.6487536888090853493)=%.20g (expected %.20g)\n",ll_exp(-0.6487536888090853493),cr_exp(-0.6487536888090853493)); 
+ printf("ll_exp(-710.13023596689617989)=%.20g (expected %.20g)\n",ll_exp(-710.13023596689617989),cr_exp(-710.13023596689617989)); 
+ printf("ll_exp(-710.4718418038312393)=%.20g (expected %.20g)\n",ll_exp(-710.4718418038312393),cr_exp(-710.4718418038312393)); 
+ printf("ll_exp(-710.47406234869117725)=%.20g (expected %.20g)\n",ll_exp(-710.47406234869117725),cr_exp(-710.47406234869117725)); 
+ printf("ll_exp(4086.5623317084014161)=%.20g (expected %.20g)\n",ll_exp(4086.5623317084014161),cr_exp(4086.5623317084014161)); 
+ return 0;
+#endif
+
+ init_HR_Timer();
+#ifdef CHECK_MAIN_CR_FUNCTIONS 
  // check sqrt
 #define ref_sqrt_LD(x) __builtin_sqrtl(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_sqrt(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_sqrt(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("Testing %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
  
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("Sizeof double=%u size of long double=%u\n",(unsigned)sizeof(double),(unsigned)sizeof(long double));
- printf("Complied with C standard version=%u on GCC %s\n\n",(unsigned int)__STDC_VERSION__,__VERSION__);
- printf("Testing %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -956,22 +1130,172 @@ int main(int argc, char *argv[])
  printf(" max relative error found was %g (=%.3f bits) at %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x); 
  printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
  // calculate ulp according to "accuracy" paper
- double nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
- // now test log(x)
+#ifdef cr_sqrt /* in most cases ya_crmath.h would use a macro to set cr_sqrt(x)=__builtin_sqrt ,if that's been done then repeat test using actual C version as well */
+ #undef cr_sqrt /* swap back to using real cr_sqrt() */
+ extern double cr_sqrt(double x);// need to define it here as its not defined this way in cr_math.h [ there is a macro ] 
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+ 
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
+
+ y=ref_sqrt_LD((long double)x);
+ y_cr=sqrt_under_test(x);
+ e=fabsl((long double)y_cr-y); // error
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ rel_e=fabsl(me/y);  
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 
+			 m_rel_a=e;	  	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1009 is prime */
+ for(x=0;x<65536.5;x+=1.0/1009.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 
+			 m_rel_a=e;		  	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ printf(" max relative error found was %g (=%.3f bits) at %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+ 
+#endif
+
+
+ // now test cr_log(x)
 #undef ref_sqrt_LD 
 #undef ref_sqrt_DBL
 #undef sqrt_under_test 
 #define ref_sqrt_LD(x) __builtin_logl(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_log(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_log(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime. Log(0) is -inf
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test 
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1057,20 +1381,171 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs); 
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
- // Now test exp(x)
+ // now test ya_log(x)
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test 
+#define ref_sqrt_LD(x) __builtin_logl(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#define ref_sqrt_DBL(x) __builtin_log(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_log(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime. Log(0) is -inf
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test 
+ x=0x1.fffffffffffffp-1;
+
+ y=ref_sqrt_LD((long double)x);
+ y_cr=sqrt_under_test(x);
+ e=fabsl((long double)y_cr-y); // error
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ rel_e=fabsl(me/y);
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 
+			 m_rel_a=e;		  	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1009 is prime */
+ for(x=0;x<65536.5;x+=1.0/1009.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 
+			 m_rel_a=e;		  	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ printf(" max relative error found was %g (=%.3f bits) at %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+
+
+ // Now test cr_exp(x) 
 #undef ref_sqrt_LD 
 #undef ref_sqrt_DBL
 #undef sqrt_under_test 
 #define ref_sqrt_LD(x) __builtin_expl(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_exp(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_exp(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<655.365;x+=1.0/1062599) // 1009, 10091 & 100907, 1062599 are prime. - note exp(700)=1e+304 which is close to the max double 
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<655.365;x+=1.0/1062599)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1156,23 +1631,188 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs); 
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test 
 
-
- // check sin(x) vs f128 sin(x) - had to do this as using sinl() gave big errors!
+ // Now test ya_exp(x) 
 #undef ref_sqrt_LD 
 #undef ref_sqrt_DBL
 #undef sqrt_under_test 
-#define ref_sqrt_LD(x) sinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
-//#define ref_sqrt_LD(x) sinl(x) /* gives big max. error */
-#define ref_sqrt_DBL(x) __builtin_sin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
-#define sqrt_under_test(x) cr_sin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+#define ref_sqrt_LD(x) __builtin_expl(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#define ref_sqrt_DBL(x) __builtin_exp(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_exp(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<655.365;x+=1.0/1062599) // 1009, 10091 & 100907, 1062599 are prime. - note exp(700)=1e+304 which is close to the max double 
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<655.365;x+=1.0/1062599)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
  errs=0;
- __float128 y128,e128,m_rel_a128  ;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
+ y=ref_sqrt_LD((long double)x);
+ y_cr=sqrt_under_test(x);
+ e=fabsl((long double)y_cr-y); // error
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ rel_e=fabsl(me/y);
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+#if 1	 
+	 if(!(isnan(y_cr)==isnan(yr) && isinf(y_cr)==isinf(yr)))
+	 	{
+	 	 ++errs;
+	 	 printf("Error at x=%.20g: %s returns %.20g but should be (from %s) %.20g\n",x,TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 	}
+	 if(isnan(yr) || isinf(yr))
+	 	{
+	 	 continue;// - cannot check abs error of special values
+	 	}	 	
+#else
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error at x=%.20g: %s returns %g but should be (from %s) %g\n",x,TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+#endif	 	
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y;
+			 m_rel_a=e;	 	  	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1009 is prime */
+ for(x=0;x<65536.5;x+=1.0/1009.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y=ref_sqrt_LD((long double)x);
+ 	 e=fabsl((long double)y_cr-y); // abs error
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 
+			 m_rel_a=e;		  	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ printf(" max relative error found was %g (=%.3f bits) at %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+
+
+
+ // check cr_sin(x) vs f128 sin(x) - had to do this as using sinl() gave big errors!
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) sinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) sinl(x) /* gives big max. error */
+#endif
+#define ref_sqrt_DBL(x) __builtin_sin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) cr_sin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
  printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0-6.5;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+ 
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
  y128=ref_sqrt_LD((__float128)x);
  y=(long double)y128;
  y_cr=sqrt_under_test(x);
@@ -1228,7 +1868,7 @@ int main(int argc, char *argv[])
 	}
  printf("searching for larger errors...\n");	
  /* now check a range of values 1062599 is prime 65.5365 is a little above 20*PI */
- for(x=0;x<65.5365;x+=1.0/1062599.0)
+ for(x=-6.5;x<65.5365;x+=1.0/1062599.0)
  	{yr=ref_sqrt_DBL(x);
 	 y_cr=sqrt_under_test(x);
 	 if(isnan(yr) || isinf(yr))
@@ -1268,20 +1908,193 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
- // check cos(x) vs f128 cos(x) - had to do this as using cosl() gave big errors!
+ // check ya_sin(x) vs f128 sin(x) - had to do this as using sinl() gave big errors!
 #undef ref_sqrt_LD 
 #undef ref_sqrt_DBL
-#undef sqrt_under_test 
-#define ref_sqrt_LD(x) cosq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
-#define ref_sqrt_DBL(x) __builtin_cos(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
-#define sqrt_under_test(x) cr_cos(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) sinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) sinl(x) /* gives big max. error */
+#endif
+#define ref_sqrt_DBL(x) __builtin_sin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_sin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+ 
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ y_cr=sqrt_under_test(x);
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=fabsl(me/y);
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 if(x>1000.0 || x<-1000.0) continue; // x is in radians so large values are "silly"
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1062599 is prime 65.5365 is a little above 20*PI */
+ for(x=-6.5;x<65.5365;x+=1.0/1062599.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+#ifdef INSTRUMENT /* if defined add print_ll_sin_counters() & print_ll_cos_counters()*/ 
+ void print_ll_sin_counters(void);
+ print_ll_sin_counters();
+#endif
+
+ // check cr_cos(x) vs f128 cos(x) - had to do this as using cosl() gave big errors!
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) cosq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) cosl(x)
+#endif
+#define ref_sqrt_DBL(x) __builtin_cos(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) cr_cos(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
  printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
  y128=ref_sqrt_LD((__float128)x);
  y=(long double)y128;
  y_cr=sqrt_under_test(x);
@@ -1337,7 +2150,7 @@ int main(int argc, char *argv[])
 	}
  printf("searching for larger errors...\n");	
  /* now check a range of values 1062599 is prime 65.5365 is a little above 20*PI */
- for(x=0;x<65.5365;x+=1.0/1062599.0)
+ for(x=-6.5;x<65.5365;x+=1.0/1062599.0)
  	{yr=ref_sqrt_DBL(x);
 	 y_cr=sqrt_under_test(x);
 	 if(isnan(yr) || isinf(yr))
@@ -1377,22 +2190,202 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
+ // check ya_cos(x) vs f128 cos(x) - had to do this as using cosl() gave big errors!
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) cosq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) cosl(x)
+#endif
+#define ref_sqrt_DBL(x) __builtin_cos(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_cos(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-6.5;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ y_cr=sqrt_under_test(x);
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=fabsl(me/y); 
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 if(x>1000.0 || x<-1000.0) continue; // x is in radians so large values are "silly"
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1062599 is prime 65.5365 is a little above 20*PI */
+ for(x=-6.5;x<65.5365;x+=1.0/1062599.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+#ifdef INSTRUMENT /* if defined add print_ll_sin_counters() & print_ll_cos_counters()*/  
+ void print_ll_cos_counters(void);
+ print_ll_cos_counters();
+#endif 
 
  // check atan2(y,x)
 #undef ref_sqrt_LD 
 #undef ref_sqrt_DBL
 #undef sqrt_under_test
-// in the line below __builtin_sin(x) & cos as arguments are correct as we want to compare atan2() with identical argument
+// in the line below __builtin_sin(x) & cos as arguments are correct as we want to compare atan2() with identical argument - note we hardcode sin,cos into "baseline timing
 #define ref_sqrt_LD(x) __builtin_atan2l((long double)__builtin_sin(x),(long double)__builtin_cos(x)) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_atan2(__builtin_sin(x),__builtin_cos(x)) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_atan2(__builtin_sin(x),__builtin_cos(x)) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ // 1st we do "baseline" as sin,cos take a finite amount of time
+ ysum=0;
+ start_t= read_HR_Timer();
+ //for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ for(x=0;x<65.5365;x+=1.0/1062599.0)
+ 	{ysum+=__builtin_sin(x)+__builtin_cos(x);
+	}
+ end_t= read_HR_Timer(); 
+ double baseline_time=end_t-start_t;
+ printf("Baseline (sin(x)+cos(x) took %g secs [end sum=%g]\n",baseline_time,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ //for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ for(x=0;x<65.5365;x+=1.0/1062599.0)
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=(end_t-start_t)-baseline_time;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ //for(x=0;x<65536.5;x+=1.0/10091.0)
+ for(x=0;x<65.5365;x+=1.0/1062599.0) 
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=(end_t-start_t)-baseline_time;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1479,8 +2472,14 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs); 
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
  
  // check pow(x,y) for x^3
 #undef ref_sqrt_LD 
@@ -1489,10 +2488,31 @@ int main(int argc, char *argv[])
 #define ref_sqrt_LD(x) ((long double)x*(long double)x*(long double)x) /* __builtin_powl(x,3) function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_pow(x,3) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_pow(x,3) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1578,8 +2598,14 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs); 
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
  // check pow(x,y) for x^0.5 (sqrt(x)
 #undef ref_sqrt_LD 
@@ -1588,10 +2614,30 @@ int main(int argc, char *argv[])
 #define ref_sqrt_LD(x) sqrtl((long double)x) /* __builtin_powl(x,0.5) function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_pow(x,0.5) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_pow(x,0.5) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1677,8 +2723,14 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
- printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs); 
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
  
  // check pow(x,y) for x^-0.5 (1/sqrt(x))
 #undef ref_sqrt_LD 
@@ -1687,10 +2739,30 @@ int main(int argc, char *argv[])
 #define ref_sqrt_LD(x) sqrtl(1.0L/(long double)x) /* __builtin_powl(x,-0.5) function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
 #define ref_sqrt_DBL(x) __builtin_pow(x,-0.5) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
 #define sqrt_under_test(x) cr_pow(x,-0.5) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0) // 1009, 10091 & 100907 are prime. Cannot start at 0 as 1/sqrt(0) is infinity
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=1.0/10091.0;x<65536.5;x+=1.0/10091.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
  errs=0;
  // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
  x=0x1.fffffffffffffp-1;
- printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
  y=ref_sqrt_LD((long double)x);
  y_cr=sqrt_under_test(x);
  e=fabsl((long double)y_cr-y); // error
@@ -1776,8 +2848,711 @@ int main(int argc, char *argv[])
  // calculate ulp according to "accuracy" paper
  nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
  printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ ulp_err=(double)(m_rel_a/(long double)(nexty-m_rel_e_y ));
+ printf("So accuracy of approximation %s vs %s is %.3f ulp\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),ulp_err);
+ if(ulp_err>0.5) 
+ 	{errs_ulp++ ;
+ 	 printf("**** Warning error >0.5ulp for %s ****\n",TO_STRING(sqrt_under_test(x)));
+ 	}
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test 
+#endif /* CHECK_MAIN_CR_FUNCTIONS */
+
+ printf("\nchecking derived functions:\n");
+
+ // check tan(x) = sin(x)/cos(x) vs f128 tan(x) 
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) tanq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) tanl(x)
+#endif
+#define ref_sqrt_DBL(x) __builtin_tan(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_tan(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/1009.0) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65536.5;x+=1.0/1009.0)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ y_cr=sqrt_under_test(x);
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=fabsl(me/y); 
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 if(x>1000.0 || x<-1000.0) continue; // x is in radians so large values are "silly"
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 100907 is prime 65.5365 is a little above 20*PI */
+ for(x=0;x<65.5365;x+=1.0/100907.0)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y);
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
  printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
- if(errs!=0) printf("Warning: %d errors found in NAN/INF handling\n",errs);  
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+
+ // check asin(x) = atan2 (x, sqrt ((1.0 + x) * (1.0 - x)))
+ // note asin(x) only valid for -1<=x<=1
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) asinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) asinl(x)
+#endif
+#define ref_sqrt_DBL(x) __builtin_asin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_asin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-1;x<=1;x+=1.0/10091.0e4) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-1;x<=1;x+=1.0/10091.0e4)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ y_cr=sqrt_under_test(x);
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=fabsl(me/y); 
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 if(x>1000.0 || x<-1000.0) continue; // x is in radians so large values are "silly"
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1062599 is prime  */
+ for(x=-1;x<=1;x+=1.0/1062599.0e1)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+ 
+ // check acos(x) = atan2 (sqrt ((1.0 + x) * (1.0 - x)), x) =>  1-x^2 can be (more accurately) calculated by fma as fma(x,-x,1)
+ // acos(x) is only valid for -1<=x<=1
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) acosq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) acosl(x)
+#endif
+#define ref_sqrt_DBL(x) __builtin_acos(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+#define sqrt_under_test(x) ya_acos(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting %s vs %s : \n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-1;x<=1;x+=1.0/10091.0e4) // 1009, 10091 & 100907 are prime
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=-1;x<1;x+=1.0/10091.0e4)
+ 	{ysum+=sqrt_under_test(x);
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("cr_xxx (%s) took %g secs [end sum=%g]\n",TO_STRING(sqrt_under_test(x)),time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0x1.fffffffffffffp-1;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ y_cr=sqrt_under_test(x);
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=fabsl(e/y);// rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=fabsl(me/y); 
+ printf("Checking values in special_vals[]...\n");
+ for(int i=0;i<nos_elements_in(special_vals);++i)
+	{
+	 x=special_vals[i];
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 if(x>1000.0 || x<-1000.0) continue; // x is in radians so large values are "silly"
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}	 	
+	
+	}
+ printf("searching for larger errors...\n");	
+ /* now check a range of values 1062599 is prime 65.5365 is a little above 20*PI */
+ for(x=-1;x<=1;x+=1.0/1062599.0e1)
+ 	{yr=ref_sqrt_DBL(x);
+	 y_cr=sqrt_under_test(x);
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("%s vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(sqrt_under_test(x)),TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ printf("So accuracy of approximation vs %s is %.3f ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test 
+
+ /* check sin(x) vs f128 sin(x) - using recurrence #1 below to step by a fixed amount
+ 	 cos(x+d)=cos(x)-(a*cos(x)+b*sin(x))
+	 sin(x+d)=sin(x)-(a*sin(x)-b*cos(x))
+ 
+ 	where a and b are precomputed as:
+	 a=2*(sin(d/2))^2
+	 b=sin(d)
+	 
+	 With d=1.0/1062599.0 , 0-2*pi gives 1.74e+09 ulp, and a *0.23 execution time (vs ya_sin())
+*/
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) sinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) sinl(x) /* gives big max. error */
+#endif
+#define ref_sqrt_DBL(x) ya_sin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+//#define sqrt_under_test(x) cr_sin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+ printf("\nTesting sin() calculated by recurrence #1 vs %s : \n",TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+#if 0 /* use __float128 [ if 0 use double] */
+ const double XINC=(1.0/1062599.0);// same value as used for cr_sin & cr_cos above
+ __float128 sin_x=0,cos_x=1,last_cos_x,a,b; // initial values for sin(0) and cos(0)
+ a=sinq(0.5Q*XINC);
+ a=2.0Q*a*a; // a=2*(sin(d/2))^2
+ b=sinq(XINC); //  b=sin(d)
+#else 
+ const double XINC=(1.0/1062599.0);// same value as used for cr_sin & cr_cos above
+ double sin_x=0,cos_x=1,last_cos_x,a,b; // initial values for sin(0) and cos(0)
+ a=cr_sin(0.5*XINC);
+ a=2.0*a*a; // a=2*(sin(d/2))^2
+ b=cr_sin(XINC); //  b=sin(d)
+#endif
+ start_t= read_HR_Timer();
+ for(x=0;x<65.5365;x+=XINC)
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65.5365;x+=XINC)
+ 	{ysum+=sin_x;
+ 	 // now update recurrence for next x - we have to calculate sin_x and cos_x, but we only use sin_x here
+ 	 last_cos_x=cos_x;
+ 	 cos_x-=a*cos_x+b*sin_x;
+ 	 sin_x-=a*sin_x-b*last_cos_x;
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("recurrence for sin(x) took %g secs [end sum=%g]\n",time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+ 
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ sin_x=0;cos_x=1; // restart the recurrence at x=0
+ y_cr=sin_x;
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=0;// initialise rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=0;// initialise rel error 
+ // cannot check random values , so cannot do checks at "special values"
+ printf("searching for larger errors...\n"); /*	6.283185307179586476925286766559 is 2*PI */
+ __float128 x128;// needs to be very accurate as XINC is small and need x to be accurate as a double as recurence does NOT use x directly
+ for(x128=0;x128<6.283185307179586476925286766559;x128+=XINC)
+ 	{x=(double)x128;
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sin_x;
+ 	 // now update recurrence for next x
+ 	 last_cos_x=cos_x;
+ 	 cos_x-=a*cos_x+b*sin_x;
+ 	 sin_x-=a*sin_x-b*last_cos_x;
+	  	 
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("recurrence #1 for sin(x) vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ printf("So accuracy of approximation vs %s is %.3g ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
 
 
+ /* Another recurrance (#2) from Weisstein, Eric W. "Multiple-Angle Formulas." From MathWorld--A Wolfram Resource. https://mathworld.wolfram.com/Multiple-AngleFormulas.html
+ 
+	sin(nx)	=	2sin[(n-1)x]cosx-sin[(n-2)x]							(52)
+	cos(nx)	=	2cos[(n-1)x]cosx-cos[(n-2)x]							(53)
+	tan(nx)	=	(tan[(n-1)x]+tanx)/(1-tan[(n-1)x]tanx)					(54) 
+	
+Using sin(nx) from 52 the simplest approach seems to be to calculate 1 step ahead at every step
+precompute c2=2*cos(x)
+set sin(0*x)=0
+	sin(1*x)=sin(x)
+  recurance then gives
+	sin(2*x)=sin(1)*c2 - 0 = 2*sin(x)*cos(x) which is correct
+
+Using long doubles (without fmal()) this is much less accurate (but a little faster) than recurance 1 for the (small) value of XINC tested
+With a relatively large XINC, doubles could be used (perhaps with fma) making it faster and perhaps accurate enough?
+
+With d=1.0/1062599.0 and using long double (without fmal) [REC2_USE_LDBL defined] , 0-2*pi gives 3.97e+15 ulp, and a *0.17 execution time (vs ya_sin())
+						 using doubles (and fma) [REC2_USE_LDBL not defined] ,      0-2*pi gives 5.89e+18 ulp, and a *0.16 execution time (vs ya_sin())
+For comparison recurence #1 using doubles (without fma), 							0-2*pi gives 1.74e+09 ulp, and a *0.23 execution time (vs ya_sin())
+*/
+#undef ref_sqrt_LD 
+#undef ref_sqrt_DBL
+#undef sqrt_under_test
+#ifndef __BORLANDC__
+ #define ref_sqrt_LD(x) sinq(x) /* function thats taken to be "exact" - either sqrtl(x) or __builtin_sqrtl(x) - must take a long double argument (x) and return a long double */
+#else
+ #define ref_sqrt_LD(x) sinl(x) /* gives big max. error */
+#endif
+#define ref_sqrt_DBL(x) ya_sin(x) /* function thats taken to be "exact" - either sqrt(x) or __builtin_sqrt(x) - must take a ldouble argument (x) and return a double - only used for NAM,INF */
+//#define sqrt_under_test(x) cr_sin(x) /* function under test - normally here that is cr_sqrt(x), but can also test library sqrt - must take a double argument (x) and return a double */ 
+
+// #define REC2_USE_LDBL /* if not defined use doubles (and fma)*/
+
+ printf("\nTesting sin() calculated by recurrence #2 vs %s : \n",TO_STRING(ref_sqrt_LD(x)));
+ /* do timing */
+ ysum=0;
+
+ // XINC=(1.0/1062599.0);// same value as used for 1st recurance
+#ifdef REC2_USE_LDB
+ long double sin_nx=0,sin_np1x,cx2; 
+ cx2=2.0q*cosl(XINC);// Constant, saves multiply by 2 at each step
+ sin_nx=0;// sin(0*XINC)
+ sin_np1x=sinl(XINC);// sin(1*XINC)
+#else
+ double sin_nx=0,sin_np1x,cx2; 
+ cx2=2*cr_cos(XINC);// Constant, saves multiply by 2 at each step
+ sin_nx=0;// sin(0*XINC)
+ sin_np1x=cr_sin(XINC);// sin(1*XINC)
+#endif
+
+ start_t= read_HR_Timer();
+ for(x=0;x<65.5365;x+=XINC)
+ 	{ysum+=ref_sqrt_DBL(x);
+	}
+ end_t= read_HR_Timer();
+ time_ref=end_t-start_t;
+ printf("Reference (%s) took %g secs [end sum=%g]\n",TO_STRING(ref_sqrt_DBL(x)),time_ref,ysum);
+ ysum=0;
+ start_t= read_HR_Timer();
+ for(x=0;x<65.5365;x+=XINC)
+ 	{ysum+=sin_nx;
+ 	 // now update recurrence for next x 
+	 double prev_sin_np1x=sin_np1x;
+#ifdef REC2_USE_LDB	 
+	 sin_np1x=sin_np1x*cx2-sin_nx; // next value from recurance
+#else	 
+	 sin_np1x=__builtin_fma(sin_np1x,cx2,-sin_nx); // use doubles and fma
+#endif	 
+	 sin_nx=prev_sin_np1x; // shift along 1 step
+	}
+ end_t= read_HR_Timer();
+ time_cr=end_t-start_t;
+ printf("recurrence for sin(x) took %g secs [end sum=%g]\n",time_cr,ysum); 
+ printf("Ratio of time_cr to time_ref=%g\n",time_cr/time_ref);
+ 
+ errs=0;
+ // first check is just used to initialise variables to sensible values, actual value of x used is not critical, but it must be a valid argument for the function under test  
+ x=0;
+ y128=ref_sqrt_LD((__float128)x);
+ y=(long double)y128;
+ sin_nx=0; // restart the recurrence at x=0
+ sin_np1x=sinl(XINC);// sin(1*x)
+ y_cr=sin_nx;
+ e128=fabsq((__float128)y_cr-y); // error
+ e=e128;
+ me=e;// use this value as "baseline" for wider test below
+ me_x=x;
+ me_y=y;
+ rel_e=0;// initialise rel error [ relative to correct result]
+ m_rel_e=rel_e;
+ m_rel_e_x=x;
+ m_rel_e_y=y;
+ m_rel_a=e;	
+ m_rel_a128=e128;
+ rel_e=0;// initialise rel error 
+ // cannot check random values , so cannot do checks at "special values"
+ printf("searching for larger errors...\n"); /*	6.283185307179586476925286766559 is 2*PI */
+ for(x128=0;x128<6.283185307179586476925286766559;x128+=XINC)
+ 	{x=(double)x128;
+	 yr=ref_sqrt_DBL(x);
+	 y_cr=sin_nx;
+ 	 // now update recurrence for next x 
+	 double prev_sin_np1x=sin_np1x;
+#ifdef REC2_USE_LDB	 
+	 sin_np1x=sin_np1x*cx2-sin_nx; // next value from recurance
+#else	 
+	 sin_np1x=__builtin_fma(sin_np1x,cx2,-sin_nx); // use doubles and fma
+#endif
+	 sin_nx=prev_sin_np1x; // shift along 1 step
+	  	 
+	 if(isnan(yr) || isinf(yr))
+	 	{
+		 if(isnan(y_cr)!=isnan(yr) && isinf(y_cr)!=isinf(yr))
+	 		{++errs;
+	 		 printf("Error: %s returns %g but should be (from %s) %g\n",TO_STRING(sqrt_under_test(x)),y_cr,TO_STRING(ref_sqrt_DBL(x)),yr);
+	 		}
+	 	 continue;// allows indenting below to match next loop below
+	 	}
+	 y128=ref_sqrt_LD((__float128)x);
+	 y=(long double)y128;
+	 e128=fabsq((__float128)y_cr-y); // error
+	 e=e128;
+ 	 if(e>me)
+ 	 	{me=e;
+ 	 	 me_x=x;
+ 	 	 me_y=y;
+ 	 	}
+ 	  if(fabs(yr)>=DBL_MIN) /* we need to avoid dividing by denorms as that reduces the dynamic range and we end up with a smaller result in ulp terms */
+ 	  	{
+	 	 rel_e=fabsl(e/y); // rel error [ relative to correct result]
+	 	 if(rel_e>m_rel_e)
+	 	  	{
+			 m_rel_e=rel_e;
+			 m_rel_e_x=x; 
+			 m_rel_e_y=y; 	
+			 m_rel_a=e;	  
+			 m_rel_a128=e128;	
+	 	  	}
+	 	}
+ 	}
+ rel_e=fabsl(me/me_y);
+ printf("recurrence #2 for sin(x) vs %s max abs difference found was %g (=%.3f bits) at %.20g\n",TO_STRING(ref_sqrt_LD(x)),(double)me,(double)(-log2l(rel_e)),me_x);
+ my_printf(" max relative error found was %g (=%.3f bits) at %.20g where abs error was %.20Lg and expected y was %.20g\n",(double)m_rel_e,(double)(-log2l(m_rel_e)),m_rel_e_x,(long double)m_rel_a128,m_rel_e_y); 
+ printf(" So accuracy of approximation is %.3f bits\n",exp2((double)DBL_MANT_DIG-(double)(-log2l(m_rel_e))));
+ // calculate ulp according to "accuracy" paper
+ nexty=nextafter(m_rel_e_y,DBL_MAX);// next floating point number up
+ printf("\n1ulp at x=%.20g, y=%.20g is %g\n",m_rel_e_x,m_rel_e_y,nexty-m_rel_e_y);
+ printf("So accuracy of approximation vs %s is %.3g ulp\n",TO_STRING(ref_sqrt_LD(x)),(double)(m_rel_a/(long double)(nexty-m_rel_e_y )));
+ if(errs!=0) {tot_errs++; printf("Warning: %d errors found in NAN/INF handling\n",errs);}
+ errs=0; // ready for next test
+
+
+ if(errs_ulp>0)
+ 	printf("**** Note that %d tests that should be 0.500ulp had larger errors\n",errs_ulp);
+ if(tot_errs>0)
+ 	printf("**** Note that %d tests had errors in their NAN/INF handling\n",tot_errs);
+#ifdef __BORLANDC__
+  printf("Press return to finish:\n");
+  getchar();
+#endif
 }

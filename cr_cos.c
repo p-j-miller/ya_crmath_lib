@@ -30,6 +30,7 @@ SOFTWARE.
 
 #include <stdint.h>
 #include <fenv.h> // for fegetround, FE_TONEAREST, FE_DOWNWARD, FE_UPWARD
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif
@@ -1874,8 +1875,8 @@ cos_fast (double *h, double *l, double x)
 
 /* Assume x is a regular number and x > 0x1.6a09e667f3bccp-27. */
 __attribute__((cold))
-static double
-cos_accurate (double x)
+double 
+_cr_cos_accurate (double x)
 {
   dint64_t X[1];
   dint_fromd (X, x);
@@ -2080,5 +2081,5 @@ cr_cos (double x)
   if (__builtin_expect (left == right, 1))
     return left;
 
-  return cos_accurate (t.f);
+  return _cr_cos_accurate(t.f);
 }

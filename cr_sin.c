@@ -31,6 +31,7 @@ SOFTWARE.
 #include <stdint.h>
 #include <inttypes.h>
 #include <fenv.h> // for fegetround, FE_TONEAREST, FE_DOWNWARD, FE_UPWARD
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif
@@ -1885,8 +1886,7 @@ sin_fast (double *h, double *l, double x)
 
 /* Assume x is a regular number, and |x| > 0x1.7137449123ef6p-26. */
 __attribute__((cold))
-static double
-sin_accurate (double x)
+ double _cr_sin_accurate (double x)
 {
   double absx = (x > 0) ? x : -x;
 
@@ -2103,5 +2103,5 @@ cr_sin (double x)
   if (__builtin_expect (left == right, 1))
     return left;
 
-  return sin_accurate (x);
+  return _cr_sin_accurate (x);
 }

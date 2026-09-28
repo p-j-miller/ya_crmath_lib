@@ -36,6 +36,7 @@ SOFTWARE.
 #include <fenv.h> // for fenv_t, feholdexcept, fetestexcept, ...
 #include <stdio.h> // needed in case of correct rounding failure
 #include <stdint.h>
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif

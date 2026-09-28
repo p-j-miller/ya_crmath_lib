@@ -36,12 +36,13 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */  
 #include <stdint.h>
 #include <math.h>
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO, SQRT_FENV_SUPPORT */
 /* Peter Miller: code below cannot be compiled with -Ofast as this makes the compiler break some C rules that we need, so make sure of this here */
 /* we also need -msse2 and -mfpmath=sse to actually use the sse instructions for float and double maths */
 #if (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7)) || defined(__clang__)
  #if !defined(__BORLANDC__)
   #pragma GCC push_options
-  #pragma GCC optimize ("-O3") /* cannot use Ofast, normally -O3 is OK. Note macro expansion does not work here ! */
+  #pragma GCC optimize ("O3,no-math-errno") /* cannot use Ofast, normally -O3 is OK. Note macro expansion does not work here ! */
  #endif
  // based on  https://jdebp.uk/FGA/predefined-macros-processor.html "__i386__" is set by GCC,Clang,Intel which is good enough as the outer #if limits us to gcc and clang
  #ifdef __i386__
@@ -49,7 +50,8 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  #endif 
 #endif
 
-#define FENV_SUPPORT 1
+// Peter Miller - note while the C code is below, ya_crmath.h will use the builtin sqrt (via a macro) where SSE2 (or above) is available as this is a single instruction thats accurate & fast.
+// The test program removes the macro (if its used) to check the C implementation as well 
 
 /* __rsqrt_tab[] merged in from sqrt_data.h and sqrt_data.c from musl-1.2.6 by Peter Miller 1/9/2026 */
 /* if x in [1,2): i = (int)(64*x);
@@ -254,7 +256,7 @@ double cr_sqrt(double x)
 	s &= 0x000fffffffffffff;
 	s |= top << 52;
 	y = asdouble(s);
-	if (FENV_SUPPORT) {
+	if (SQRT_FENV_SUPPORT) {
 		/* handle rounding modes and inexact exception:
 		   only (s+1)^2 == 2^42 m case is exact otherwise
 		   add a tiny value to cause the fenv effects.  */

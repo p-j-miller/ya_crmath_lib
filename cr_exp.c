@@ -28,6 +28,7 @@ SOFTWARE.
    The MIT license still applies.
 */
 #include <stdint.h>
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif
@@ -320,7 +321,7 @@ static const double t1[][2] = {
   {0x1.4a47a505b3a46p-54, 0x1.02b338c811703p+0}, {0x1.e47120223468p-54, 0x1.02be6e199c811p+0},
 };
 
-static double __attribute__((cold,noinline)) as_exp_accurate(double x){
+double __attribute__((cold,noinline)) _cr_as_exp_accurate(double x){
   static const double ch[][2] =
     {{0x1p+0, 0}, {0x1p-1, 0x1.712f72ecec2cfp-99}, {0x1.5555555555555p-3, 0x1.5555555554d07p-57},
      {0x1.5555555555555p-5, 0x1.55194d28275dap-59}, {0x1.1111111111111p-7, 0x1.12faa0e1c0f7bp-63},
@@ -433,11 +434,11 @@ double cr_exp(double x){
     fh = fasttwosum(ix.f, fh, &e);
     fl += e;
     double ub = fh + (fl + eps), lb = fh + (fl - eps);
-    if (__builtin_expect(ub != lb, 0)) return as_exp_accurate(x);
+    if (__builtin_expect(ub != lb, 0)) return _cr_as_exp_accurate(x);
     fh = as_todenormal(lb);
   } else {
     double ub = fh + (fl + eps), lb = fh + (fl - eps);
-    if(__builtin_expect( ub != lb, 0)) return as_exp_accurate(x);
+    if(__builtin_expect( ub != lb, 0)) return _cr_as_exp_accurate(x);
     fh = as_ldexp(lb, ie);
   }
   return fh;

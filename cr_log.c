@@ -30,6 +30,7 @@ SOFTWARE.
 */
 
 #include <stdint.h>
+#include "ya_crmath_config.h" /* get configuration - like CORE_MATH_SUPPORT_ERRNO */
 #ifdef CORE_MATH_SUPPORT_ERRNO
 #include <errno.h>
 #endif
@@ -651,8 +652,8 @@ static void log_2 (dint64_t *r, dint64_t *x);
 static inline double dint_tod (dint64_t *a);
 
 /* accurate path, using Tom Hubrecht's code below */
-static double
-cr_log_accurate (double x)
+double
+_cr_log_accurate (double x)
 {
   dint64_t X, Y;
 
@@ -716,7 +717,7 @@ cr_log (double x)
   if (left == right)
     return left;
   /* the probability of failure of the fast path is about 2^-11.5 */
-  return cr_log_accurate (x);
+  return _cr_log_accurate (x);
 }
 
 /* the following code was copied from Tom Hubrecht's implementation of
